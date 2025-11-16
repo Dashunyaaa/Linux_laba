@@ -1,5 +1,5 @@
 from math import tanh
-from sqlite3 import dbapi2 as sqlite
+import psycopg2
 
 
 def dtanh(y):
@@ -7,16 +7,23 @@ def dtanh(y):
 
 
 class searchnet:
-    def __init__(self, dbname):
-        self.con = sqlite.connect(dbname)
+    def __init__(self):
+        try:
+            self.con = psycopg2.connect(f"dbname='nn' user='alexander' host='localhost' password='mint12345'")
+        except (Exception) as error:
+            print(error)
 
     def __del__(self):
         self.con.close()
 
     def makeTables(self):
-        self.con.execute("create table hiddennode(create_key)")
-        self.con.execute("create table wordhidden(fromid,toid,strength)")
-        self.con.execute("create table hiddenurl(fromid,toid,strength)")
+        with self.con.cursor() as cur:
+            try:
+                cur.execute("create table hiddennode(rowid SERIAL PRIMARY KEY, create_key text)")
+                cur.execute("create table wordhidden(rowid SERIAL PRIMARY KEY, fromid int, toid int, strength float)")
+                cur.execute("create table hiddenurl(rowid SERIAL PRIMARY KEY, fromid int,toid int,strength float)")
+            except (Exception, psycopg2.DatabaseError) as error:
+                print(f"s.27: {error}");
         self.con.commit()
 
     def getStrength(self, fromID, toID, layer):
@@ -25,7 +32,12 @@ class searchnet:
         else:
             table = 'hiddenurl'
 
-        res = self.con.execute(f"select strength from {table} where fromid={fromID} and toid={toID}").fetchone()
+        with self.con.cursor() as cur:
+            try:
+                cur.execute(f"select strength from {table} where fromid={fromID} and toid={toID}")
+                res = cur.fetchone()
+            except (Exception, psycopg2.DatabaseError) as error:
+                print(f"s.39: {error}");
 
         if res is None:
             if layer == 0:
@@ -42,47 +54,64 @@ class searchnet:
         else:
             table = 'hiddenurl'
 
-        res = self.con.execute(f"select rowid from {table} where fromid={fromID} and toid={toID}").fetchone()
+        with self.con.cursor() as cur:
+            try:
+                cur.execute(f"select rowid from {table} where fromid={fromID} and toid={toID}")
+                res = cur.fetchone()
 
-        if res is None:
-            self.con.execute(f"insert into {table}(fromid,toid,strength) values ({fromID},{toID},{strength})")
-        else:
-            rowID = res[0]
-            self.con.execute(f"update {table} set strength={strength} where rowid={rowID}")
+                if res is None:
+                    cur.execute(f"insert into {table}(fromid,toid,strength) values ({fromID},{toID},{strength})")
+                else:
+                    rowID = res[0]
+                    cur.execute(f"update {table} set strength={strength} where rowid={rowID}")
+            except (Exception, psycopg2.DatabaseError) as error:
+                print(f"s.66: {error}");
 
     def generateHiddenNode(self, wordIDs, urls):
         if len(wordIDs) > 3:
             return None
 
         createKey = "_".join(sorted([str(wi) for wi in wordIDs]))
-        res = self.con.execute(f"select rowid from hiddennode where create_key='{createKey}'").fetchone()
 
-        if res is None:
-            cur = self.con.execute(f"insert into hiddennode(create_key) values ('{createKey}')")
-            hiddenID = cur.lastrowid
+        with self.con.cursor() as cur:
+            try:
+                cur.execute(f"select rowid from hiddennode where create_key='{createKey}'")
+                res = cur.fetchone()
+            except (Exception, psycopg2.DatabaseError) as error:
+                print(f"s.81: {error}");
 
-            for wordID in wordIDs:
-                self.setStrength(wordID, hiddenID, 0, 1.0 / len(wordIDs))
+            if res is None:
+                try:
+                    cur.execute(f"insert into hiddennode(create_key) values ('{createKey}') returning rowid")
+                    hiddenID = cur.fetchone()[0]
+                except (Exception, psycopg2.DatabaseError) as error:
+                    print(f"s.88: {error}");
+                
+                for wordID in wordIDs:
+                    self.setStrength(wordID, hiddenID, 0, 1.0 / len(wordIDs))
 
-            for urlID in urls:
-                self.setStrength(hiddenID, urlID, 1, 0.1)
-
-            self.con.commit()
+                for urlID in urls:
+                    self.setStrength(hiddenID, urlID, 1, 0.1)
+            
+        self.con.commit()
 
     def getAllHiddenIDs(self, wordIDs, urlIDs):
         l1 = {}
+        with self.con.cursor() as cur:
+            try:
+                for wordID in wordIDs:
+                    cur.execute(f"select toID from wordhidden where fromid={wordID}")
+                    tmp = cur.fetchall()
+                    for row in tmp:
+                        l1[row[0]] = 1
 
-        for wordID in wordIDs:
-            cur = self.con.execute(f"select toID from wordhidden where fromid={wordID}")
-
-            for row in cur:
-                l1[row[0]] = 1
-
-        for urlID in urlIDs:
-            cur = self.con.execute(f"select fromid from hiddenurl where toID-{urlID}")
-
-            for row in cur:
-                l1[row[0]] = 1
+                for urlID in urlIDs:
+                    cur.execute(f"select fromid from hiddenurl where toID={urlID}")
+                    tmp = cur.fetchall()
+                    for row in tmp:
+                        l1[row[0]] = 1
+            except (Exception, psycopg2.DatabaseError) as error:
+                print(f"s.111: {error}");
 
         return list(l1.keys())
 
